@@ -11,3 +11,5 @@ lisence = "GNU General Public License v3.0"
 
 [dependencies]
 clap = { version = "4.1.8", features = ["derive"] }
+rand = "0.8.5"
+rand_pcg = "0.3.1"

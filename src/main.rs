@@ -65,10 +65,10 @@ fn main() {
     } else {
         println!("true size: {}", true_size);
     }
-    println!("read lines: {}", store_lines.len());
+    // println!("read lines: {}", store_lines.len());
     let mut all_array: Vec<usize> = (0..total_data_size).collect();
     let mut sampled_idx = all_array.iter().choose_multiple(&mut rng, true_size);
-    println!("sampled idx: {:?}", sampled_idx);
+    // println!("sampled idx: {:?}", sampled_idx);
     let mut output_file = File::create(output_name).expect("failed to create output file");
     // output skipped lines
 
@@ -97,7 +97,6 @@ fn main() {
         }
         // output sampled lines with delimiter \n
         for idx in sampled_idx {
-            println!("sampled line: {}", store_lines[*idx]);
             output_file
                 .write_all(store_lines[*idx].as_bytes())
                 .expect("failed to write to output file");

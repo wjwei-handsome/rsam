@@ -1,0 +1,12 @@
+[package]
+name = "rsam"
+version = "0.1.0"
+edition = "2021"
+authors = ["Wenjie Wei <wjwei9908@gmail.com>", "Songtao Gui <>"]
+descriptions = "Random sampler for text-based data in Rust"
+readme = "README.md"
+lisence = "GNU General Public License v3.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]

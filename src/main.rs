@@ -1,12 +1,16 @@
+extern crate bytecount;
 extern crate rand_pcg;
 use clap::Parser;
+use log::{error, info, warn};
+use log4rs;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Lines, Stdin, Write};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
 
-// const KEEP_NUM: f64 = 1000000.0;
-
+// TODO : .gz files support
+// TODO : add unit test
 #[derive(Debug)]
 enum Size {
     Absolute(usize),
@@ -16,161 +20,155 @@ enum Size {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// sizes to radnom sample, it should be a string
+    /// size to radnom sample, it could be a interger (absolute) or a float (relative)
     #[arg(short, long)]
     size: String,
 
-    /// output file names, it could be empty for stdout if `sizes` is a single number
+    /// output file name, empty for stdout
     #[arg(short, long, required = false, default_value = "stdout")]
     output: String,
 
-    /// comment line character
+    /// comment line character for fix lines (note: if multiple input files, only the last file will be used for fix lines)
     #[arg(short, long, default_value = "")]
     comment: String,
+
+    /// quiet mode
+    #[arg(short, long, default_value = "false")]
+    quiet: bool,
+
+    /// rewrite output file
+    #[arg(short, long, default_value = "false")]
+    rewrite: bool,
 
     /// input files
     inputs: Vec<String>,
 }
 
 fn main() {
+    // init logger
+    log4rs::init_file("log_cfg.yml", Default::default()).unwrap();
+
     // parse args
     let args = Args::parse();
 
+    // parse if quiet mode
+    let quiet = args.quiet;
+
     // parse size
     let size = args.size;
-    println!("input size: {:?}", size);
+    if !quiet {
+        info!("input size: {:?}", size);
+    }
     let parsed_size: Size = parse_size(&size);
-    println!("parsed size: {:?}", parsed_size);
+    // if relative size > 1, error and exit
+    match parsed_size {
+        Size::Relative(x) => {
+            if x > 1.0 {
+                error!("relative size should be less than 1.0");
+                std::process::exit(1);
+            }
+        }
+        _ => {}
+    }
+    if !quiet {
+        info!("parsed size: {:?}", parsed_size);
+    }
 
-    // parse output name and check if it is stdout
+    // parse input files and check if it is stdin or exists
+    let input_files = args.inputs;
+    let mut stdin_mode = false;
+    if input_files.is_empty() {
+        stdin_mode = true;
+    }
+    if !quiet {
+        if stdin_mode {
+            info!("input from stdin");
+        } else {
+            info!("input files: {:?}", input_files);
+        }
+    }
+    if !stdin_mode {
+        // check if input files exist if not stdin mode
+        input_files_exist(&input_files);
+    }
+
+    // parse output name and check if it is stdout or exists
     let output_name = args.output;
-    println!("output name: {:?}", output_name);
+    let rewrite = args.rewrite;
+    if !quiet {
+        info!("output to: {:?}", output_name);
+    }
     let mut output_stdout = true;
     if output_name != "stdout" {
         output_stdout = false;
+        // check if output file exists
+        outfile_exist(&output_name, rewrite);
     }
 
+    // parse comment char
     let comment = if args.comment.is_empty() {
         None
     } else {
         Some(args.comment)
     };
+    if !quiet {
+        info!("comment char: {:?}", comment);
+    }
 
-    let (total_data_size, fix_lines, store_lines) = get_inputs_info(args.inputs, comment);
-    let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
-    let true_size = get_usize(&parsed_size, total_data_size);
-    if true_size > total_data_size {
-        println!("size is larger than total data size, use total data size instead");
+    // start read inputs and shuffle
+    let (line_count, fix_lines, stored_lines) = if stdin_mode {
+        let handle = std::io::stdin();
+        count_lines(handle, &comment, stdin_mode).unwrap()
+    } else {
+        let mut all_count = 0;
+        let mut fix_lines: Vec<String> = Vec::new();
+        for file in input_files.iter() {
+            let handle = File::open(file).unwrap();
+            let (tmp_count, tmp_fix_lines, _) = count_lines(handle, &comment, stdin_mode).unwrap();
+            all_count += tmp_count;
+            fix_lines = tmp_fix_lines;
+            // there are no stored_lines if not stdin
+        }
+        (all_count, fix_lines, Vec::new())
+    };
+    if !quiet {
+        info!("total line count: {}", line_count);
+    }
+    if line_count == 0 {
+        error!("no data to sample");
+        std::process::exit(0);
+    }
+
+    // get true size
+    let true_size = get_true_size(&parsed_size, line_count);
+    if !quiet {
+        info!("true size: {}", true_size);
+    }
+    if true_size > line_count {
+        error!("true size is larger than total data size! R U kidding?");
         std::process::exit(1);
-    } else {
-        println!("true size: {}", true_size);
     }
-    // println!("read lines: {}", store_lines.len());
-    let mut all_array: Vec<usize> = (0..total_data_size).collect();
+
+    // shuffle
+    let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
+    let all_array: Vec<usize> = (0..line_count).collect();
     let mut sampled_idx = all_array.iter().choose_multiple(&mut rng, true_size);
-    // println!("sampled idx: {:?}", sampled_idx);
-    let mut output_file = File::create(output_name).expect("failed to create output file");
-    // output skipped lines
+    // println!("sampled_idx: {:?}", sampled_idx);
+    sampled_idx.sort();
+    // println!("sorted sampled_idx: {:?}", sampled_idx);
 
-    if output_stdout {
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        for line in fix_lines {
-            handle
-                .write_all(line.as_bytes())
-                .expect("failed to write to output file");
-            handle.write_all(b"\n"); // add delimiter
-        }
-        for idx in sampled_idx {
-            println!("sampled line: {}", store_lines[*idx]);
-            handle
-                .write_all(store_lines[*idx].as_bytes())
-                .expect("failed to write to output file");
-            handle.write_all(b"\n"); // add delimiter
-        }
-    } else {
-        for line in fix_lines {
-            output_file
-                .write_all(line.as_bytes())
-                .expect("failed to write to output file");
-            output_file.write_all(b"\n"); // add delimiter
-        }
-        // output sampled lines with delimiter \n
-        for idx in sampled_idx {
-            output_file
-                .write_all(store_lines[*idx].as_bytes())
-                .expect("failed to write to output file");
-            output_file.write_all(b"\n"); // add delimiter
-        }
-    }
+    // output samples
+    output_samples(
+        &output_name,
+        output_stdout,
+        &fix_lines,
+        &stored_lines,
+        &sampled_idx,
+        &input_files,
+    )
 }
-fn get_inputs_info(
-    inputs: Vec<String>,
-    comment: Option<String>,
-) -> (usize, Vec<String>, Vec<String>) {
-    let mut line_nums = 0;
-    let mut skipped_lines = Vec::new(); // init skipped lines
-    let mut stored_lines = Vec::new(); // init stored lines
-    if inputs.is_empty() {
-        // no input files specified, read from stdin instead
-        println!("input from stdin");
 
-        let stdin = std::io::stdin();
-        let reader = BufReader::new(stdin);
-        // count lines, but nor read whole file in memory
-
-        // skip comment lines and stroe it in a vector
-        if let Some(comment) = comment {
-            // has comment char specified
-            for line in reader.lines() {
-                let line = line.unwrap();
-                if !line.starts_with(&*comment) {
-                    line_nums += 1;
-                    stored_lines.push(line);
-                } else {
-                    skipped_lines.push(line);
-                }
-            }
-        } else {
-            // no comment char specified
-            for _line in reader.lines() {
-                line_nums += 1;
-                stored_lines.push(_line.unwrap());
-            }
-        }
-        return (line_nums, skipped_lines, stored_lines);
-    } else {
-        println!("input from files: {:?}", inputs);
-        // extract input files
-        for filename in inputs.iter() {
-            // check if file exists
-            let file =
-                File::open(filename).expect(format!("Unable to open file {}", filename).as_str());
-            let reader = BufReader::new(file);
-            // skip comment lines and stroe it in a vector
-            if let Some(ref comment) = comment {
-                // has comment char specified
-                for line in reader.lines() {
-                    let line = line.unwrap();
-                    if !line.starts_with(&*comment) {
-                        line_nums += 1;
-                        stored_lines.push(line);
-                    } else {
-                        skipped_lines.push(line);
-                    }
-                }
-            } else {
-                // no comment char specified
-                for _line in reader.lines() {
-                    line_nums += 1;
-                    stored_lines.push(_line.unwrap());
-                }
-            }
-        }
-        return (line_nums, skipped_lines, stored_lines);
-    }
-}
-fn get_usize(size: &Size, data_size: usize) -> usize {
+fn get_true_size(size: &Size, data_size: usize) -> usize {
     match size {
         Size::Absolute(n) => *n,
         Size::Relative(f) => (data_size as f64 * *f).floor() as usize,
@@ -179,10 +177,226 @@ fn get_usize(size: &Size, data_size: usize) -> usize {
 
 fn parse_size(size: &String) -> Size {
     if size.contains('.') {
-        let size: f64 = size.parse::<f64>().expect("size should be a number");
-        Size::Relative(size)
+        // if contains dot, it is a relative size
+        // if can't parse to float, log error and exit
+        let size = size.parse::<f64>();
+        match size {
+            Ok(size) => Size::Relative(size),
+            Err(_) => {
+                error!("size should be a number");
+                std::process::exit(1);
+            }
+        }
     } else {
-        let size: usize = size.parse::<usize>().expect("size should be a number");
-        Size::Absolute(size)
+        // if not, it is a abslute size
+        // if can't parse to int, log error and exit
+        let size = size.parse::<usize>();
+        match size {
+            Ok(size) => Size::Absolute(size),
+            Err(_) => {
+                error!("size should be a number");
+                std::process::exit(1)
+            }
+        }
+    }
+}
+
+fn input_files_exist(input_files: &Vec<String>) -> () {
+    // check if input files exist
+    for file in input_files.iter() {
+        let path = Path::new(file);
+        if !path.exists() {
+            error!("file {} does not exist", file);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn outfile_exist(outputname: &String, rewrite: bool) -> () {
+    // check if output file exists
+    let path = Path::new(outputname);
+    if path.exists() {
+        if rewrite {
+            // rewrite the file
+            warn!("file {} exist, will rewrite it", outputname);
+        } else {
+            // exit
+            error!("file {} exist, use -r to rewrite it", outputname);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn count_lines<R: io::Read>(
+    handle: R,
+    comment: &Option<String>,
+    input_stdin: bool,
+) -> Result<(usize, Vec<String>, Vec<String>), io::Error> {
+    let mut reader = BufReader::with_capacity(1024 * 32, handle);
+    let mut count = 0;
+    let mut skipped_lines = Vec::new(); // init skipped lines
+    let mut stored_lines = Vec::new(); // init stored lines for stdin
+    if input_stdin {
+        // read from stdin
+        // skip comment lines and stroe it in a vector
+        if let Some(comment) = comment {
+            // has comment char specified
+            for line in reader.lines() {
+                let line = line.unwrap();
+                if !line.starts_with(&*comment) {
+                    count += 1;
+                    stored_lines.push(line);
+                } else {
+                    skipped_lines.push(line);
+                }
+            }
+        } else {
+            // no comment char specified
+            for _line in reader.lines() {
+                count += 1;
+                stored_lines.push(_line.unwrap());
+            }
+        }
+        return Ok((count, skipped_lines, stored_lines));
+    } else {
+        // read from file
+        // skip comment lines and stroe it in a vector
+        if let Some(comment) = comment {
+            // has comment char specified
+            // skip comment lines, just read liners
+            for line in reader.lines() {
+                let line = line.unwrap();
+                if !line.starts_with(&*comment) {
+                    count += 1;
+                } else {
+                    skipped_lines.push(line);
+                }
+            }
+        } else {
+            // no comment char specified
+            loop {
+                let len = {
+                    let buffer = reader.fill_buf()?;
+                    if buffer.is_empty() {
+                        break;
+                    }
+                    count += bytecount::count(&buffer, b'\n');
+                    buffer.len()
+                };
+                reader.consume(len);
+            }
+        }
+        Ok((count, skipped_lines, stored_lines))
+    }
+}
+
+fn output_samples(
+    output_name: &String,
+    output_stdout: bool,
+    fix_lines: &Vec<String>,
+    stored_lines: &Vec<String>,
+    sampled_idx: &Vec<&usize>,
+    input_files: &Vec<String>,
+) -> () {
+    if stored_lines.is_empty() {
+        // if stored lines is empty, it means we are reading from file
+        // println!("read from files");
+        output_from_files(
+            input_files,
+            output_name,
+            output_stdout,
+            fix_lines,
+            sampled_idx,
+        )
+    } else {
+        // if stored lines is not empty, it means we are reading from stdin
+        // println!("read from stdin");
+        output_from_stored_lines(
+            output_name,
+            output_stdout,
+            fix_lines,
+            stored_lines,
+            sampled_idx,
+        )
+    }
+}
+
+fn output_from_stored_lines(
+    output_name: &String,
+    output_stdout: bool,
+    fix_lines: &Vec<String>,
+    stored_lines: &Vec<String>,
+    sampled_idx: &Vec<&usize>,
+) -> () {
+    if output_stdout {
+        // output to stdout
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        for line in fix_lines.iter() {
+            handle.write_all(line.as_bytes()).unwrap();
+            handle.write_all(b"\n").unwrap();
+        }
+        for idx in sampled_idx.iter() {
+            handle.write_all(stored_lines[**idx].as_bytes()).unwrap();
+            handle.write_all(b"\n").unwrap();
+        }
+    } else {
+        // output to file
+        let mut file = File::create(output_name).unwrap();
+        for line in fix_lines.iter() {
+            file.write_all(line.as_bytes()).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        for idx in sampled_idx.iter() {
+            file.write_all(stored_lines[**idx].as_bytes()).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+    }
+}
+
+fn output_from_files(
+    input_files: &Vec<String>,
+    output_name: &String,
+    output_stdout: bool,
+    fix_lines: &Vec<String>,
+    sampled_idx: &Vec<&usize>,
+) -> () {
+    if output_stdout {
+        // output to stdout
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        for line in fix_lines.iter() {
+            handle.write_all(line.as_bytes()).unwrap();
+            handle.write_all(b"\n").unwrap();
+        }
+        let mut idx = 0;
+        for file in input_files.iter() {
+            let reader = BufReader::new(File::open(file).unwrap());
+            for line in reader.lines() {
+                if sampled_idx.contains(&&idx) {
+                    handle.write_all(line.unwrap().as_bytes()).unwrap();
+                    handle.write_all(b"\n").unwrap();
+                }
+                idx += 1;
+            }
+        }
+    } else {
+        // output to file
+        let mut outputfile = File::create(output_name).unwrap();
+        for line in fix_lines.iter() {
+            outputfile.write_all(line.as_bytes()).unwrap();
+            outputfile.write_all(b"\n").unwrap();
+        }
+        let mut idx = 0;
+        for file in input_files.iter() {
+            let reader = BufReader::new(File::open(file).unwrap());
+            for line in reader.lines() {
+                if sampled_idx.contains(&&idx) {
+                    outputfile.write_all(line.unwrap().as_bytes()).unwrap();
+                    outputfile.write_all(b"\n").unwrap();
+                }
+                idx += 1;
+            }
+        }
     }
 }

@@ -1,0 +1,15 @@
+---
+# log4rs.yaml
+refresh_rate: 30 seconds
+# appender 负责将日志收集到控制台或文件, 可配置多个
+appenders:
+  console:
+    kind: console
+    target: stderr
+    encoder:
+      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l})} {m}{n}"
+# 对全局 log 进行配置
+root:
+  level: info
+  appenders:
+    - console

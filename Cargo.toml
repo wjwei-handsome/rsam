@@ -3,13 +3,16 @@ name = "rsam"
 version = "0.1.0"
 edition = "2021"
 authors = ["Wenjie Wei <wjwei9908@gmail.com>", "Songtao Gui <>"]
-descriptions = "Random sampler for text-based data in Rust"
+description = "Random sampler for text-based data in Rust"
 readme = "README.md"
-lisence = "GNU General Public License v3.0"
+license = "GNU General Public License v3.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bytecount = "0.6.3"
 clap = { version = "4.1.8", features = ["derive"] }
+log = "0.4.17"
+log4rs = "1.2.0"
 rand = "0.8.5"
 rand_pcg = "0.3.1"

@@ -152,20 +152,20 @@ fn main() {
     }
 
     // shuffle
-    info!("generate rng...");
+    // info!("generate rng...");
     let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
-    info!("generate all array...");
+    // info!("generate all array...");
     let all_array: Vec<usize> = (0..line_count).collect();
-    info!("sampling...");
+    // info!("sampling...");
     let mut sampled_idx = all_array.iter().choose_multiple(&mut rng, true_size);
     // println!("sampled_idx: {:?}", sampled_idx);
-    info!("sorting...");
+    // info!("sorting...");
     sampled_idx.sort();
-    info!("sort done");
+    // info!("sort done");
     // println!("sorted sampled_idx: {:?}", sampled_idx);
 
     // output samples
-    info!("Start output");
+    // info!("Start output");
     output_samples(
         &output_name,
         output_stdout,
@@ -175,7 +175,7 @@ fn main() {
         &input_files,
         &comment,
     );
-    info!("all done");
+    // info!("all done");
 }
 
 fn get_true_size(size: &Size, data_size: usize) -> usize {
@@ -311,7 +311,7 @@ fn output_samples(
 ) -> () {
     if stored_lines.is_empty() {
         // if stored lines is empty, it means we are reading from file
-        info!("read from files");
+        // info!("read from files");
         output_from_files(
             input_files,
             output_name,
@@ -322,7 +322,7 @@ fn output_samples(
         )
     } else {
         // if stored lines is not empty, it means we are reading from stdin
-        info!("read from stdin");
+        // info!("read from stdin");
         output_from_stored_lines(
             output_name,
             output_stdout,

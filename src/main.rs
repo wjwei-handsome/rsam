@@ -5,12 +5,14 @@ use log::{error, info, warn};
 use log4rs;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
-// TODO : .gz files support
-// TODO : add unit test
+// TODO: .gz files support
+// TODO: add unit test
+// TODO: update readme and usage
 #[derive(Debug)]
 enum Size {
     Absolute(usize),
@@ -18,7 +20,7 @@ enum Size {
 }
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about)]
 struct Args {
     /// size to radnom sample, it could be a interger (absolute) or a float (relative)
     #[arg(short, long)]
@@ -150,14 +152,20 @@ fn main() {
     }
 
     // shuffle
+    info!("generate rng...");
     let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
+    info!("generate all array...");
     let all_array: Vec<usize> = (0..line_count).collect();
+    info!("sampling...");
     let mut sampled_idx = all_array.iter().choose_multiple(&mut rng, true_size);
     // println!("sampled_idx: {:?}", sampled_idx);
+    info!("sorting...");
     sampled_idx.sort();
+    info!("sort done");
     // println!("sorted sampled_idx: {:?}", sampled_idx);
 
     // output samples
+    info!("Start output");
     output_samples(
         &output_name,
         output_stdout,
@@ -165,7 +173,9 @@ fn main() {
         &stored_lines,
         &sampled_idx,
         &input_files,
-    )
+        &comment,
+    );
+    info!("all done");
 }
 
 fn get_true_size(size: &Size, data_size: usize) -> usize {
@@ -297,20 +307,22 @@ fn output_samples(
     stored_lines: &Vec<String>,
     sampled_idx: &Vec<&usize>,
     input_files: &Vec<String>,
+    comment: &Option<String>,
 ) -> () {
     if stored_lines.is_empty() {
         // if stored lines is empty, it means we are reading from file
-        // println!("read from files");
+        info!("read from files");
         output_from_files(
             input_files,
             output_name,
             output_stdout,
             fix_lines,
             sampled_idx,
+            comment,
         )
     } else {
         // if stored lines is not empty, it means we are reading from stdin
-        // println!("read from stdin");
+        info!("read from stdin");
         output_from_stored_lines(
             output_name,
             output_stdout,
@@ -328,29 +340,22 @@ fn output_from_stored_lines(
     stored_lines: &Vec<String>,
     sampled_idx: &Vec<&usize>,
 ) -> () {
-    if output_stdout {
-        // output to stdout
+    let (std_handle, file_handle) = if output_stdout {
         let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        for line in fix_lines.iter() {
-            handle.write_all(line.as_bytes()).unwrap();
-            handle.write_all(b"\n").unwrap();
-        }
-        for idx in sampled_idx.iter() {
-            handle.write_all(stored_lines[**idx].as_bytes()).unwrap();
-            handle.write_all(b"\n").unwrap();
-        }
+        let handle = stdout.lock();
+        (Some(handle), None)
     } else {
-        // output to file
-        let mut file = File::create(output_name).unwrap();
-        for line in fix_lines.iter() {
-            file.write_all(line.as_bytes()).unwrap();
-            file.write_all(b"\n").unwrap();
+        let file = File::create(output_name).unwrap();
+        (None, Some(file))
+    };
+
+    // output to file
+    match (std_handle, file_handle) {
+        (Some(handle), None) => {
+            output_to_handle_stdin(handle, stored_lines, fix_lines, sampled_idx)
         }
-        for idx in sampled_idx.iter() {
-            file.write_all(stored_lines[**idx].as_bytes()).unwrap();
-            file.write_all(b"\n").unwrap();
-        }
+        (None, Some(file)) => output_to_handle_stdin(file, stored_lines, fix_lines, sampled_idx),
+        _ => unreachable!(),
     }
 }
 
@@ -360,43 +365,87 @@ fn output_from_files(
     output_stdout: bool,
     fix_lines: &Vec<String>,
     sampled_idx: &Vec<&usize>,
+    comment: &Option<String>,
 ) -> () {
-    if output_stdout {
-        // output to stdout
+    let (std_handle, file_handle) = if output_stdout {
         let stdout = io::stdout();
-        let mut handle = stdout.lock();
-        for line in fix_lines.iter() {
-            handle.write_all(line.as_bytes()).unwrap();
-            handle.write_all(b"\n").unwrap();
+        let handle = stdout.lock();
+        (Some(handle), None)
+    } else {
+        let file = File::create(output_name).unwrap();
+        (None, Some(file))
+    };
+
+    // output to file
+    match (std_handle, file_handle) {
+        (Some(handle), None) => {
+            output_to_handle(handle, input_files, fix_lines, sampled_idx, comment)
         }
-        let mut idx = 0;
+        (None, Some(file)) => output_to_handle(file, input_files, fix_lines, sampled_idx, comment),
+        _ => unreachable!(),
+    }
+}
+
+fn output_to_handle(
+    mut handle: impl Write,
+    input_files: &Vec<String>,
+    fix_lines: &Vec<String>,
+    sampled_idx: &Vec<&usize>,
+    comment: &Option<String>,
+) -> () {
+    for line in fix_lines.iter() {
+        handle.write_all(line.as_bytes()).unwrap();
+        handle.write_all(b"\n").unwrap();
+    }
+    let mut tmp_hashmap = HashMap::with_capacity(sampled_idx.len());
+    for item in sampled_idx {
+        tmp_hashmap.insert(*item, 0);
+    }
+    let mut idx = 0;
+
+    if let Some(comment) = comment {
         for file in input_files.iter() {
             let reader = BufReader::new(File::open(file).unwrap());
             for line in reader.lines() {
-                if sampled_idx.contains(&&idx) {
-                    handle.write_all(line.unwrap().as_bytes()).unwrap();
+                let line = line.unwrap();
+                if !line.starts_with(&*comment) {
+                    if tmp_hashmap.contains_key(&idx) {
+                        handle.write_all(line.as_bytes()).unwrap();
+                        handle.write_all(b"\n").unwrap();
+                    }
+                    idx += 1;
+                } else {
+                    continue;
+                }
+            }
+        }
+    } else {
+        for file in input_files.iter() {
+            let reader = BufReader::new(File::open(file).unwrap());
+            for line in reader.lines() {
+                let line = line.unwrap();
+                if tmp_hashmap.contains_key(&idx) {
+                    handle.write_all(line.as_bytes()).unwrap();
                     handle.write_all(b"\n").unwrap();
                 }
                 idx += 1;
             }
         }
-    } else {
-        // output to file
-        let mut outputfile = File::create(output_name).unwrap();
-        for line in fix_lines.iter() {
-            outputfile.write_all(line.as_bytes()).unwrap();
-            outputfile.write_all(b"\n").unwrap();
-        }
-        let mut idx = 0;
-        for file in input_files.iter() {
-            let reader = BufReader::new(File::open(file).unwrap());
-            for line in reader.lines() {
-                if sampled_idx.contains(&&idx) {
-                    outputfile.write_all(line.unwrap().as_bytes()).unwrap();
-                    outputfile.write_all(b"\n").unwrap();
-                }
-                idx += 1;
-            }
-        }
+    }
+}
+
+fn output_to_handle_stdin(
+    mut handle: impl Write,
+    stored_lines: &Vec<String>,
+    fix_lines: &Vec<String>,
+    sampled_idx: &Vec<&usize>,
+) -> () {
+    for line in fix_lines.iter() {
+        handle.write_all(line.as_bytes()).unwrap();
+        handle.write_all(b"\n").unwrap();
+    }
+    for idx in sampled_idx.iter() {
+        handle.write_all(stored_lines[**idx].as_bytes()).unwrap();
+        handle.write_all(b"\n").unwrap();
     }
 }

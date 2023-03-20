@@ -7,7 +7,7 @@ appenders:
     kind: console
     target: stderr
     encoder:
-      pattern: "{d(%Y-%m-%d %H:%M:%S)} {h({l})} {m}{n}"
+      pattern: "{d} {h({l})} {m}{n}"
 # 对全局 log 进行配置
 root:
   level: info

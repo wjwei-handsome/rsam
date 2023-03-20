@@ -33,7 +33,7 @@ where
     loop {
         // generate the random addeed jumper
         let jumper = (rng.gen::<f64>().ln() / (1.0 - w).ln()).floor() as usize + 1;
-        println!("tmp_adder: {}", jumper);
+        // println!("tmp_adder: {}", jumper);
 
         match iter.nth(jumper - 1) {
             Some(n) => {

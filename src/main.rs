@@ -1,11 +1,13 @@
+pub mod core;
+
 extern crate bytecount;
 extern crate rand_pcg;
 use clap::Parser;
 use log::{error, info, warn};
 use log4rs;
+// use paris::Logger;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
@@ -42,8 +44,9 @@ struct Args {
     #[arg(short, long, default_value = "false")]
     rewrite: bool,
 
-    /// input files
-    inputs: Vec<String>,
+    /// input file
+    #[arg(short, long, required = false, default_value = "stdin")]
+    input: String,
 }
 
 fn main() {
@@ -77,21 +80,21 @@ fn main() {
     }
 
     // parse input files and check if it is stdin or exists
-    let input_files = args.inputs;
+    let input_file = args.input;
     let mut stdin_mode = false;
-    if input_files.is_empty() {
+    if input_file == "stdin" {
         stdin_mode = true;
     }
     if !quiet {
         if stdin_mode {
             info!("input from stdin");
         } else {
-            info!("input files: {:?}", input_files);
+            info!("input file: {:?}", input_file);
         }
     }
     if !stdin_mode {
         // check if input files exist if not stdin mode
-        input_files_exist(&input_files);
+        input_files_exist(&input_file);
     }
 
     // parse output name and check if it is stdout or exists
@@ -117,22 +120,17 @@ fn main() {
         info!("comment char: {:?}", comment);
     }
 
-    // start read inputs and shuffle
+    // start read inputs
     let (line_count, fix_lines, stored_lines) = if stdin_mode {
-        let handle = std::io::stdin();
-        count_lines(handle, &comment, stdin_mode).unwrap()
+        // if stdin mode, read from stdin
+        let handle = io::stdin();
+        read_inputs(handle, &comment, stdin_mode).unwrap()
     } else {
-        let mut all_count = 0;
-        let mut fix_lines: Vec<String> = Vec::new();
-        for file in input_files.iter() {
-            let handle = File::open(file).unwrap();
-            let (tmp_count, tmp_fix_lines, _) = count_lines(handle, &comment, stdin_mode).unwrap();
-            all_count += tmp_count;
-            fix_lines = tmp_fix_lines;
-            // there are no stored_lines if not stdin
-        }
-        (all_count, fix_lines, Vec::new())
+        // if not stdin mode, read from input file
+        let handle = File::open(&input_file).unwrap();
+        read_inputs(handle, &comment, stdin_mode).unwrap()
     };
+
     if !quiet {
         info!("total line count: {}", line_count);
     }
@@ -151,31 +149,53 @@ fn main() {
         std::process::exit(1);
     }
 
-    // shuffle
-    // info!("generate rng...");
-    let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
-    // info!("generate all array...");
-    let all_array: Vec<usize> = (0..line_count).collect();
-    // info!("sampling...");
-    let mut sampled_idx = all_array.iter().choose_multiple(&mut rng, true_size);
-    // println!("sampled_idx: {:?}", sampled_idx);
-    // info!("sorting...");
-    sampled_idx.sort();
-    // info!("sort done");
-    // println!("sorted sampled_idx: {:?}", sampled_idx);
+    // start sample using reservoir sampling
+    if !quiet {
+        info!("start sample");
+    }
 
-    // output samples
-    // info!("Start output");
-    output_samples(
-        &output_name,
-        output_stdout,
-        &fix_lines,
-        &stored_lines,
-        &sampled_idx,
-        &input_files,
-        &comment,
-    );
-    // info!("all done");
+    let mut rng: Pcg64 = Pcg64::from_rng(thread_rng()).expect("failed to init rng");
+    let mut sample_array = vec![String::new(); true_size];
+    let output_string = if stdin_mode {
+        let stored_lines = stored_lines.iter().map(|l| l.to_string());
+        core::reservoir_sample(stored_lines, &mut sample_array, &mut rng);
+        sample_array.join("\n")
+    } else {
+        let input_reader = BufReader::new(File::open(&input_file).unwrap());
+        let input_lines = input_reader.lines().map(|l| l.unwrap());
+        if let Some(comment) = comment {
+            let input_lines = input_lines.filter(|l| !l.starts_with(&comment));
+            core::reservoir_sample(input_lines, &mut sample_array, &mut rng);
+        } else {
+            core::reservoir_sample(input_lines, &mut sample_array, &mut rng);
+        }
+        sample_array.join("\n")
+    };
+
+    if !quiet {
+        info!("sample done");
+    }
+
+    let mut out_file: Box<dyn Write> = if output_stdout {
+        Box::new(io::stdout())
+    } else {
+        Box::new(File::create(output_name).unwrap())
+    };
+    if !quiet {
+        info!("start output");
+    }
+
+    if !fix_lines.is_empty() {
+        let fix_strings = fix_lines.join("\n");
+        out_file.write_all(fix_strings.as_bytes()).unwrap();
+        out_file.write_all(b"\n").unwrap();
+    }
+    out_file.write_all(output_string.as_bytes()).unwrap();
+    out_file.write_all(b"\n").unwrap();
+
+    if !quiet {
+        info!("ALL DONE");
+    }
 }
 
 fn get_true_size(size: &Size, data_size: usize) -> usize {
@@ -211,14 +231,12 @@ fn parse_size(size: &String) -> Size {
     }
 }
 
-fn input_files_exist(input_files: &Vec<String>) -> () {
+fn input_files_exist(input_file: &String) -> () {
     // check if input files exist
-    for file in input_files.iter() {
-        let path = Path::new(file);
-        if !path.exists() {
-            error!("file {} does not exist", file);
-            std::process::exit(1);
-        }
+    let path = Path::new(input_file);
+    if !path.exists() {
+        error!("file {} does not exist", input_file);
+        std::process::exit(1);
     }
 }
 
@@ -237,7 +255,7 @@ fn outfile_exist(outputname: &String, rewrite: bool) -> () {
     }
 }
 
-fn count_lines<R: io::Read>(
+fn read_inputs<R: io::Read>(
     handle: R,
     comment: &Option<String>,
     input_stdin: bool,
@@ -297,155 +315,5 @@ fn count_lines<R: io::Read>(
             }
         }
         Ok((count, skipped_lines, stored_lines))
-    }
-}
-
-fn output_samples(
-    output_name: &String,
-    output_stdout: bool,
-    fix_lines: &Vec<String>,
-    stored_lines: &Vec<String>,
-    sampled_idx: &Vec<&usize>,
-    input_files: &Vec<String>,
-    comment: &Option<String>,
-) -> () {
-    if stored_lines.is_empty() {
-        // if stored lines is empty, it means we are reading from file
-        // info!("read from files");
-        output_from_files(
-            input_files,
-            output_name,
-            output_stdout,
-            fix_lines,
-            sampled_idx,
-            comment,
-        )
-    } else {
-        // if stored lines is not empty, it means we are reading from stdin
-        // info!("read from stdin");
-        output_from_stored_lines(
-            output_name,
-            output_stdout,
-            fix_lines,
-            stored_lines,
-            sampled_idx,
-        )
-    }
-}
-
-fn output_from_stored_lines(
-    output_name: &String,
-    output_stdout: bool,
-    fix_lines: &Vec<String>,
-    stored_lines: &Vec<String>,
-    sampled_idx: &Vec<&usize>,
-) -> () {
-    let (std_handle, file_handle) = if output_stdout {
-        let stdout = io::stdout();
-        let handle = stdout.lock();
-        (Some(handle), None)
-    } else {
-        let file = File::create(output_name).unwrap();
-        (None, Some(file))
-    };
-
-    // output to file
-    match (std_handle, file_handle) {
-        (Some(handle), None) => {
-            output_to_handle_stdin(handle, stored_lines, fix_lines, sampled_idx)
-        }
-        (None, Some(file)) => output_to_handle_stdin(file, stored_lines, fix_lines, sampled_idx),
-        _ => unreachable!(),
-    }
-}
-
-fn output_from_files(
-    input_files: &Vec<String>,
-    output_name: &String,
-    output_stdout: bool,
-    fix_lines: &Vec<String>,
-    sampled_idx: &Vec<&usize>,
-    comment: &Option<String>,
-) -> () {
-    let (std_handle, file_handle) = if output_stdout {
-        let stdout = io::stdout();
-        let handle = stdout.lock();
-        (Some(handle), None)
-    } else {
-        let file = File::create(output_name).unwrap();
-        (None, Some(file))
-    };
-
-    // output to file
-    match (std_handle, file_handle) {
-        (Some(handle), None) => {
-            output_to_handle(handle, input_files, fix_lines, sampled_idx, comment)
-        }
-        (None, Some(file)) => output_to_handle(file, input_files, fix_lines, sampled_idx, comment),
-        _ => unreachable!(),
-    }
-}
-
-fn output_to_handle(
-    mut handle: impl Write,
-    input_files: &Vec<String>,
-    fix_lines: &Vec<String>,
-    sampled_idx: &Vec<&usize>,
-    comment: &Option<String>,
-) -> () {
-    for line in fix_lines.iter() {
-        handle.write_all(line.as_bytes()).unwrap();
-        handle.write_all(b"\n").unwrap();
-    }
-    let mut tmp_hashmap = HashMap::with_capacity(sampled_idx.len());
-    for item in sampled_idx {
-        tmp_hashmap.insert(*item, 0);
-    }
-    let mut idx = 0;
-
-    if let Some(comment) = comment {
-        for file in input_files.iter() {
-            let reader = BufReader::new(File::open(file).unwrap());
-            for line in reader.lines() {
-                let line = line.unwrap();
-                if !line.starts_with(&*comment) {
-                    if tmp_hashmap.contains_key(&idx) {
-                        handle.write_all(line.as_bytes()).unwrap();
-                        handle.write_all(b"\n").unwrap();
-                    }
-                    idx += 1;
-                } else {
-                    continue;
-                }
-            }
-        }
-    } else {
-        for file in input_files.iter() {
-            let reader = BufReader::new(File::open(file).unwrap());
-            for line in reader.lines() {
-                let line = line.unwrap();
-                if tmp_hashmap.contains_key(&idx) {
-                    handle.write_all(line.as_bytes()).unwrap();
-                    handle.write_all(b"\n").unwrap();
-                }
-                idx += 1;
-            }
-        }
-    }
-}
-
-fn output_to_handle_stdin(
-    mut handle: impl Write,
-    stored_lines: &Vec<String>,
-    fix_lines: &Vec<String>,
-    sampled_idx: &Vec<&usize>,
-) -> () {
-    for line in fix_lines.iter() {
-        handle.write_all(line.as_bytes()).unwrap();
-        handle.write_all(b"\n").unwrap();
-    }
-    for idx in sampled_idx.iter() {
-        handle.write_all(stored_lines[**idx].as_bytes()).unwrap();
-        handle.write_all(b"\n").unwrap();
     }
 }

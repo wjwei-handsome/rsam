@@ -3,7 +3,7 @@ name = "rsam"
 version = "0.1.0"
 edition = "2021"
 authors = ["Wenjie Wei <wjwei9908@gmail.com>", "Songtao Gui <>"]
-description = "Random sampler for text-based data in Rust"
+description = "Random sampler for text-based data in Rust using reservoir sampling algorithm."
 readme = "README.md"
 license = "GNU General Public License v3.0"
 

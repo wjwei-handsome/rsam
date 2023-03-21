@@ -3,8 +3,16 @@ pub mod core;
 extern crate bytecount;
 extern crate rand_pcg;
 use clap::Parser;
-use log::{error, info, warn};
-use log4rs;
+
+// use ftlog::appender::FileAppender;
+
+use log::{error, info, warn, LevelFilter};
+use log4rs::{
+    append::console::{ConsoleAppender, Target},
+    config::{Appender, Config, Root},
+    encode::pattern::PatternEncoder,
+    filter::threshold::ThresholdFilter,
+};
 // use paris::Logger;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
@@ -48,16 +56,35 @@ struct Args {
     #[arg(short, long, required = false, default_value = "stdin")]
     input: String,
 }
-
 fn main() {
-    // init logger
-    log4rs::init_file("log_cfg.yml", Default::default()).unwrap();
-
     // parse args
     let args = Args::parse();
 
     // parse if quiet mode
     let quiet = args.quiet;
+
+    // init logger
+    // set log level if quiet mode
+    let log_level = if quiet {
+        LevelFilter::Warn
+    } else {
+        LevelFilter::Info
+    };
+    // Build a stderr logger.
+    let log_stderr = ConsoleAppender::builder()
+        .target(Target::Stderr)
+        .encoder(Box::new(PatternEncoder::new("{d} {h({l})} {m}{n}")))
+        .build();
+    let log_config = Config::builder()
+        .appender(
+            Appender::builder()
+                .filter(Box::new(ThresholdFilter::new(log_level)))
+                .build("stderr", Box::new(log_stderr)),
+        )
+        .build(Root::builder().appender("stderr").build(log_level))
+        .unwrap();
+    // init logger using config
+    log4rs::init_config(log_config).unwrap();
 
     // parse size
     let size = args.size;

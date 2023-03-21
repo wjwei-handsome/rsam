@@ -4,11 +4,10 @@ A random sampler for text-based data using reservoir sampling algorithm.
 
 ## install
 
+> install cargo and rust here: https://www.rust-lang.org/tools/install
+
 ```bash
-git clone https://github.com/wjwei-handsome/rsam.git
-cd rsam
-cargo build --release
-cp ./target/release/rsam /your/bin/path
+cargo install rsam
 ```
 
 ## usage

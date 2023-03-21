@@ -1,13 +1,13 @@
 [package]
 name = "rsam"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Wenjie Wei <wjwei9908@gmail.com>", "Songtao Gui < songtaogui@163.com>"]
 description = "Random sampler for text-based data in Rust using reservoir sampling algorithm."
 readme = "README.md"
 license = "GPL-3.0-only"
 homepage = "https://wjwei.blog"
-documentation = "https://docs.rs/crate/rsam/0.1.0"
+documentation = "https://docs.rs/crate/rsam/latest"
 repository = "https://github.com/wjwei-handsome/rsam"
 exclude = ["**/tests/**", 'log_cfg.yml']
 

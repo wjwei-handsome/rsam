@@ -6,6 +6,9 @@ authors = ["Wenjie Wei <wjwei9908@gmail.com>", "Songtao Gui <>"]
 description = "Random sampler for text-based data in Rust using reservoir sampling algorithm."
 readme = "README.md"
 license = "GNU General Public License v3.0"
+homepage = "https://github.com/wjwei-handsome/rsam"
+documentation = "https://github.com/wjwei-handsome/rsam"
+repository = "https://github.com/wjwei-handsome/rsam"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

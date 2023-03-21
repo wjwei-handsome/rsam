@@ -36,7 +36,7 @@ zcat input.txt.gz | rsam -s 0.1 -o output.txt
 
 ## benchmark
 
-environment: 1.4 GHz 4-core Intel Core i5;16 GB 2133 MHz DDR3;macOS 10.15.7;
+`environment`: 1.4 GHz 4-core Intel Core i5;16 GB 2133 MHz DDR3;macOS 13.2 (22D49);
 
 ```bash
 ~/code/rsam main* ❯ time seq 200000 |./target/release/rsam -s 100000 -o /dev/null -r
@@ -57,3 +57,13 @@ Executed in  116.49 millis    fish           external
    usr time  126.31 millis    0.35 millis  125.96 millis
    sys time   14.19 millis    1.24 millis   12.95 millis
 ```
+
+## ROADMAP
+
+- [x] support multi files
+- [x] support gz file input
+- [x] support multi sizes for multi outputs
+
+## LICENSE
+
+GPL-3.0

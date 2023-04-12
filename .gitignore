@@ -16,3 +16,5 @@ Cargo.lock
 
 # test
 /test
+
+.DS_Store
